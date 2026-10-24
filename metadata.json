@@ -1,0 +1,6 @@
+{
+  "name": "REOBOTE SUPORTE",
+  "description": "Sistema completo de suporte, monitoramento de serviços, incidentes e alertas integrados com Supabase, Vercel e Telegram.",
+  "requestFramePermissions": [],
+  "majorCapabilities": []
+}
