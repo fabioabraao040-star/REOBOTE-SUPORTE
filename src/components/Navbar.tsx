@@ -1,10 +1,11 @@
 import React, { useState } from 'react';
-import { Bell, RefreshCw, Send, ShieldCheck, CheckCircle2 } from 'lucide-react';
-import { IntegrationSettings } from '../types';
+import { Bell, RefreshCw, Send, CheckCircle2, AlertTriangle } from 'lucide-react';
+import { Incident, MonitoredService } from '../types';
 
 interface NavbarProps {
   currentTabTitle: string;
-  settings: IntegrationSettings;
+  services: MonitoredService[];
+  incidents: Incident[];
   onTestTelegram: () => void;
   onRefreshData: () => void;
   isRefreshing: boolean;
@@ -12,20 +13,43 @@ interface NavbarProps {
 
 export const Navbar: React.FC<NavbarProps> = ({
   currentTabTitle,
-  settings,
+  services,
+  incidents,
   onTestTelegram,
   onRefreshData,
   isRefreshing
 }) => {
   const [showNotificationModal, setShowNotificationModal] = useState(false);
 
+  const activeIncidents = incidents.filter((incident) => incident.status !== 'resolved');
+  const unhealthyServices = services.filter((service) => service.status !== 'healthy');
+  const servicesHealthy = unhealthyServices.length === 0;
+  const uptimeLabel =
+    services.length === 0
+      ? 'Nenhum serviço monitorado'
+      : servicesHealthy
+        ? 'Todos os sistemas operacionais'
+        : `${unhealthyServices.length} serviço(s) com problema`;
+
+  const severityColor: Record<Incident['severity'], string> = {
+    critical: 'text-[#DC2626]',
+    major: 'text-[#EA580C]',
+    warning: 'text-[#EAB308]'
+  };
+
   return (
     <header className="h-16 bg-[#1E293B] border-b border-slate-800 px-6 flex items-center justify-between shrink-0">
       <div className="flex items-center gap-4">
         <h2 className="text-lg font-bold text-[#F8FAFC] tracking-tight">{currentTabTitle}</h2>
-        <div className="hidden md:flex items-center gap-2 px-3 py-1 rounded-full bg-[#16A34A]/10 border border-[#16A34A]/30 text-xs font-medium text-[#16A34A]">
-          <CheckCircle2 className="w-3.5 h-3.5" />
-          <span>Todos os sistemas operacionais (99.94% Uptime)</span>
+        <div
+          className={`hidden md:flex items-center gap-2 px-3 py-1 rounded-full text-xs font-medium border ${
+            servicesHealthy
+              ? 'bg-[#16A34A]/10 border-[#16A34A]/30 text-[#16A34A]'
+              : 'bg-[#EAB308]/10 border-[#EAB308]/30 text-[#EAB308]'
+          }`}
+        >
+          {servicesHealthy ? <CheckCircle2 className="w-3.5 h-3.5" /> : <AlertTriangle className="w-3.5 h-3.5" />}
+          <span>{uptimeLabel}</span>
         </div>
       </div>
 
@@ -59,32 +83,46 @@ export const Navbar: React.FC<NavbarProps> = ({
             title="Notificações e Alertas"
           >
             <Bell className="w-4 h-4 text-[#EAB308]" />
-            <span className="absolute -top-1 -right-1 w-2.5 h-2.5 rounded-full bg-[#DC2626] animate-ping"></span>
-            <span className="absolute -top-1 -right-1 w-2.5 h-2.5 rounded-full bg-[#DC2626]"></span>
+            {activeIncidents.length > 0 && (
+              <>
+                <span className="absolute -top-1 -right-1 w-2.5 h-2.5 rounded-full bg-[#DC2626] animate-ping"></span>
+                <span className="absolute -top-1 -right-1 w-2.5 h-2.5 rounded-full bg-[#DC2626]"></span>
+              </>
+            )}
           </button>
 
           {showNotificationModal && (
             <div className="absolute right-0 mt-2 w-80 bg-[#1E293B] border border-slate-700 rounded-2xl shadow-2xl p-4 z-50">
               <div className="flex items-center justify-between pb-3 border-b border-slate-700 mb-3">
                 <span className="font-semibold text-sm text-[#F8FAFC]">Alertas Recentes</span>
-                <span className="text-xs px-2 py-0.5 rounded bg-[#DC2626]/20 text-[#DC2626] font-medium">2 novos</span>
+                <span className="text-xs px-2 py-0.5 rounded bg-[#DC2626]/20 text-[#DC2626] font-medium">
+                  {activeIncidents.length} ativo(s)
+                </span>
               </div>
-              <div className="space-y-2.5 text-xs">
-                <div className="p-2.5 rounded-xl bg-slate-800/80 border border-slate-700/60">
-                  <div className="flex items-center justify-between font-semibold text-[#EA580C] mb-1">
-                    <span>Supabase Storage</span>
-                    <span>Há 45m</span>
-                  </div>
-                  <p className="text-slate-300">Latência elevada superou 500ms temporariamente.</p>
+
+              {activeIncidents.length === 0 ? (
+                <p className="text-xs text-slate-400 py-4 text-center">
+                  Nenhum incidente ativo no momento.
+                </p>
+              ) : (
+                <div className="space-y-2.5 text-xs max-h-64 overflow-y-auto">
+                  {activeIncidents.slice(0, 5).map((incident) => (
+                    <div
+                      key={incident.id}
+                      className="p-2.5 rounded-xl bg-slate-800/80 border border-slate-700/60"
+                    >
+                      <div className="flex items-center justify-between font-semibold mb-1">
+                        <span className={severityColor[incident.severity]}>{incident.serviceName}</span>
+                        <span className="text-slate-500">
+                          {new Date(incident.createdAt).toLocaleString('pt-BR')}
+                        </span>
+                      </div>
+                      <p className="text-slate-300">{incident.title}</p>
+                    </div>
+                  ))}
                 </div>
-                <div className="p-2.5 rounded-xl bg-slate-800/80 border border-slate-700/60">
-                  <div className="flex items-center justify-between font-semibold text-[#16A34A] mb-1">
-                    <span>Telegram Bot</span>
-                    <span>Há 2h</span>
-                  </div>
-                  <p className="text-slate-300">Webhook reconfigurado e operando normalmente.</p>
-                </div>
-              </div>
+              )}
+
               <button
                 onClick={() => setShowNotificationModal(false)}
                 className="w-full mt-3 py-1.5 bg-[#2563EB] text-white rounded-xl text-xs font-medium hover:bg-[#2563EB]/90 transition-colors"

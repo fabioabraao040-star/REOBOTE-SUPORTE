@@ -24,6 +24,23 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   const openIncidents = incidents.filter(i => i.status === 'open' || i.status === 'investigating');
   const unresolvedErrors = logs.filter(l => !l.resolved && l.severity === 'error');
 
+  const statusDot: Record<MonitoredService['status'], string> = {
+    healthy: 'bg-[#16A34A]',
+    degraded: 'bg-[#EAB308]',
+    down: 'bg-[#DC2626]'
+  };
+  const statusBadge: Record<MonitoredService['status'], string> = {
+    healthy: 'bg-[#16A34A]/10 text-[#16A34A]',
+    degraded: 'bg-[#EAB308]/10 text-[#EAB308]',
+    down: 'bg-[#DC2626]/10 text-[#DC2626]'
+  };
+  const statusLabel: Record<MonitoredService['status'], string> = {
+    healthy: 'Saudável',
+    degraded: 'Degradado',
+    down: 'Fora do Ar'
+  };
+  const healthyCount = services.filter((srv) => srv.status === 'healthy').length;
+
   return (
     <div className="space-y-6">
       {/* Banner */}
@@ -72,8 +89,8 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           </div>
           <div className="flex items-baseline justify-between">
             <span className="text-3xl font-black text-[#F8FAFC]">{services.length}</span>
-            <span className="text-xs text-[#16A34A] font-semibold flex items-center gap-1">
-              <CheckCircle2 className="w-3.5 h-3.5" /> Operacionais
+            <span className={`text-xs font-semibold flex items-center gap-1 ${healthyCount === services.length ? 'text-[#16A34A]' : 'text-[#EAB308]'}`}>
+              <CheckCircle2 className="w-3.5 h-3.5" /> {healthyCount}/{services.length} saudáveis
             </span>
           </div>
           <p className="mt-3 text-[11px] text-slate-400">Supabase DB, Vercel API, Telegram Bot</p>
@@ -94,7 +111,9 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
               {openIncidents.length > 0 ? 'Em investigação' : 'Nenhum'}
             </span>
           </div>
-          <p className="mt-3 text-[11px] text-slate-400">Notificações automáticas ativadas</p>
+          <p className="mt-3 text-[11px] text-slate-400">
+            {settings.telegramConnected ? 'Notificações automáticas ativadas' : 'Telegram pendente de configuração'}
+          </p>
         </div>
 
         {/* Telegram Status */}
@@ -108,11 +127,15 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           </div>
           <div className="flex items-baseline justify-between">
             <span className="text-xl font-black text-[#F8FAFC]">
-              {settings.telegramChatId ? 'Configurado' : 'Pendente'}
+              {settings.telegramConnected ? 'Configurado' : 'Pendente'}
             </span>
-            <span className={`w-2.5 h-2.5 rounded-full ${settings.telegramChatId ? 'bg-[#16A34A]' : 'bg-[#EAB308]'}`}></span>
+            <span className={`w-2.5 h-2.5 rounded-full ${settings.telegramConnected ? 'bg-[#16A34A]' : 'bg-[#EAB308]'}`}></span>
           </div>
-          <p className="mt-3 text-[11px] text-slate-400">Chat ID: {settings.telegramChatId || 'Não informado'}</p>
+          <p className="mt-3 text-[11px] text-slate-400">
+            {settings.telegramConnected
+              ? 'Alertas habilitados no servidor'
+              : 'Configure TELEGRAM_BOT_TOKEN e TELEGRAM_CHAT_ID'}
+          </p>
         </div>
       </div>
 
@@ -128,13 +151,15 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             {services.map(srv => (
               <div key={srv.id} className="p-3.5 rounded-2xl bg-slate-900/60 border border-slate-800 flex items-center justify-between">
                 <div className="flex items-center gap-3">
-                  <span className="w-2.5 h-2.5 rounded-full bg-[#16A34A]"></span>
+                  <span className={`w-2.5 h-2.5 rounded-full ${statusDot[srv.status]}`}></span>
                   <div>
                     <h4 className="font-semibold text-xs text-[#F8FAFC]">{srv.name}</h4>
                     <p className="text-[10px] text-slate-400 font-mono">{srv.endpoint}</p>
                   </div>
                 </div>
-                <span className="px-2.5 py-1 rounded-full text-[10px] font-semibold bg-[#16A34A]/10 text-[#16A34A]">Saudável</span>
+                <span className={`px-2.5 py-1 rounded-full text-[10px] font-semibold ${statusBadge[srv.status]}`}>
+                  {statusLabel[srv.status]}
+                </span>
               </div>
             ))}
           </div>

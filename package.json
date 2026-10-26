@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "tsx local.ts",
     "build": "vite build",
-    "start": "tsx local.ts",
+    "start": "NODE_ENV=production tsx local.ts",
     "preview": "vite preview",
     "clean": "rm -rf dist server.js",
     "lint": "tsc --noEmit"

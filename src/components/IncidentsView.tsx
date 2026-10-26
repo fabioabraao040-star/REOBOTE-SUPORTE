@@ -1,11 +1,11 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { AlertTriangle, Plus, Send, CheckCircle2, Search } from 'lucide-react';
 import { Incident, MonitoredService } from '../types';
 
 interface IncidentsViewProps {
   incidents: Incident[];
   services: MonitoredService[];
-  onCreateIncident: (incident: Incident) => void;
+  onCreateIncident: (incident: Incident, notifyTelegram: boolean) => void | Promise<void>;
   onUpdateIncidentStatus: (id: string, status: Incident['status']) => void;
   onSendTelegramAlert: (incident: Incident) => void;
 }
@@ -26,6 +26,14 @@ export const IncidentsView: React.FC<IncidentsViewProps> = ({
   const [serviceId, setServiceId] = useState(services[0]?.id || '');
   const [severity, setSeverity] = useState<Incident['severity']>('major');
   const [sendTelegram, setSendTelegram] = useState(true);
+
+  // Os serviços chegam do Supabase de forma assíncrona. Sem este efeito, o
+  // select ficava com serviceId vazio e o incidente era salvo sem serviço.
+  useEffect(() => {
+    if (!serviceId && services.length > 0) {
+      setServiceId(services[0].id);
+    }
+  }, [services, serviceId]);
 
   const filteredIncidents = incidents.filter(inc => {
     const matchesSearch = inc.title.toLowerCase().includes(search.toLowerCase()) || inc.serviceName.toLowerCase().includes(search.toLowerCase());
@@ -48,13 +56,13 @@ export const IncidentsView: React.FC<IncidentsViewProps> = ({
       severity,
       status: 'open',
       createdAt: new Date().toISOString(),
-      telegramSent: sendTelegram
+      // O banco começa com false; vira true só após o Telegram confirmar.
+      telegramSent: false
     };
 
-    onCreateIncident(newInc);
-    if (sendTelegram) {
-      onSendTelegramAlert(newInc);
-    }
+    // Registra no banco e, se marcado, dispara o alerta em seguida (o envio e a
+    // gravação de telegram_sent são feitos pelo App, na ordem correta).
+    void onCreateIncident(newInc, sendTelegram);
 
     setTitle('');
     setDescription('');

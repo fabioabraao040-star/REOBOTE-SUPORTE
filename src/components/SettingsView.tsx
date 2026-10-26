@@ -11,19 +11,13 @@ import {
   Users, 
   Lock
 } from 'lucide-react';
-import { IntegrationSettings, User } from '../types';
+import { User } from '../types';
 
 interface SettingsViewProps {
-  settings: IntegrationSettings;
-  users: User[];
-  onAddUser: (user: User) => void;
+  currentUser: User | null;
 }
 
-export const SettingsView: React.FC<SettingsViewProps> = ({
-  settings,
-  users,
-  onAddUser
-}) => {
+export const SettingsView: React.FC<SettingsViewProps> = ({ currentUser }) => {
   const [activeTab, setActiveTab] = useState<'env' | 'users' | 'sql'>('env');
   const [copiedSql, setCopiedSql] = useState(false);
   const [healthStatus, setHealthStatus] = useState<{
@@ -48,10 +42,6 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
         });
       });
   }, []);
-
-  const [newUserEmail, setNewUserEmail] = useState('');
-  const [newUserName, setNewUserName] = useState('');
-  const [newUserRole, setNewUserRole] = useState<User['role']>('operator');
 
   const sqlSchemaScript = `-- REOBOTE SUPORTE - AUDITORIA SOMENTE LEITURA
 -- Este script NAO cria, altera ou apaga tabelas.
@@ -102,21 +92,6 @@ ORDER BY tablename, policyname;
     navigator.clipboard.writeText(sqlSchemaScript);
     setCopiedSql(true);
     setTimeout(() => setCopiedSql(false), 2000);
-  };
-
-  const handleCreateUser = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newUserEmail || !newUserName) return;
-    onAddUser({
-      id: `usr-${Date.now()}`,
-      email: newUserEmail,
-      name: newUserName,
-      role: newUserRole,
-      status: 'active',
-      lastLogin: 'Nunca'
-    });
-    setNewUserEmail('');
-    setNewUserName('');
   };
 
   const supabaseActive = healthStatus?.supabaseConfigured ?? false;
@@ -224,41 +199,14 @@ ORDER BY tablename, policyname;
 
       {activeTab === 'users' && (
         <div className="p-6 rounded-3xl bg-[#1E293B] border border-slate-800 space-y-6">
-          <h3 className="text-sm font-bold text-[#F8FAFC]">Gerenciamento de Usuários Administrativos</h3>
-          
-          <form onSubmit={handleCreateUser} className="grid grid-cols-1 sm:grid-cols-4 gap-3 bg-slate-900/60 p-4 rounded-2xl border border-slate-800">
-            <input
-              type="text"
-              required
-              value={newUserName}
-              onChange={(e) => setNewUserName(e.target.value)}
-              placeholder="Nome..."
-              className="bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-[#2563EB]"
-            />
-            <input
-              type="email"
-              required
-              value={newUserEmail}
-              onChange={(e) => setNewUserEmail(e.target.value)}
-              placeholder="E-mail..."
-              className="bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-[#2563EB]"
-            />
-            <select
-              value={newUserRole}
-              onChange={(e) => setNewUserRole(e.target.value as User['role'])}
-              className="bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-[#2563EB]"
-            >
-              <option value="admin">Admin</option>
-              <option value="operator">Operador</option>
-              <option value="viewer">Visualizador</option>
-            </select>
-            <button
-              type="submit"
-              className="bg-[#16A34A] text-white font-bold text-xs rounded-xl py-2"
-            >
-              Adicionar
-            </button>
-          </form>
+          <div>
+            <h3 className="text-sm font-bold text-[#F8FAFC]">Usuários e Permissões</h3>
+            <p className="text-xs text-slate-400 mt-1">
+              Os logins são criados no Supabase Auth. A função de cada usuário fica em{' '}
+              <code className="text-slate-200">app_metadata.role</code> (admin, operator ou viewer)
+              e também é validada pelo backend.
+            </p>
+          </div>
 
           <div className="overflow-x-auto">
             <table className="w-full text-left border-collapse">
@@ -271,16 +219,38 @@ ORDER BY tablename, policyname;
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-800 text-xs">
-                {users.map(u => (
-                  <tr key={u.id} className="hover:bg-slate-800/40">
-                    <td className="p-3 font-semibold text-slate-200">{u.name}</td>
-                    <td className="p-3 text-slate-400">{u.email}</td>
-                    <td className="p-3 uppercase text-[10px] text-[#2563EB] font-bold">{u.role}</td>
+                {currentUser ? (
+                  <tr className="hover:bg-slate-800/40">
+                    <td className="p-3 font-semibold text-slate-200">{currentUser.name}</td>
+                    <td className="p-3 text-slate-400">{currentUser.email}</td>
+                    <td className="p-3 uppercase text-[10px] text-[#2563EB] font-bold">{currentUser.role}</td>
                     <td className="p-3 text-right text-[#16A34A]">Ativo</td>
                   </tr>
-                ))}
+                ) : (
+                  <tr>
+                    <td colSpan={4} className="p-6 text-center text-slate-400">
+                      Nenhum usuário autenticado.
+                    </td>
+                  </tr>
+                )}
               </tbody>
             </table>
+          </div>
+
+          <div className="p-4 rounded-2xl bg-slate-900/60 border border-slate-800 text-xs text-slate-300 space-y-2">
+            <p className="font-semibold text-slate-200">Como criar um novo acesso</p>
+            <ol className="list-decimal list-inside space-y-1 text-slate-400">
+              <li>No Supabase, abra Authentication → Users → Add user.</li>
+              <li>Defina a senha inicial e entregue ao operador.</li>
+              <li>
+                Em <code className="text-slate-200">app_metadata</code>, adicione{' '}
+                <code className="text-slate-200">{'{"role":"operator"}'}</code>.
+              </li>
+            </ol>
+            <p className="text-[11px] text-slate-500">
+              A criação direta por este painel exigiria a SERVICE_ROLE_KEY no backend; por
+              segurança, ela não é exposta ao navegador.
+            </p>
           </div>
         </div>
       )}

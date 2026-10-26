@@ -90,7 +90,13 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentTab, setCurrentTab, use
         {user && (
           <div className="pt-2 border-t border-slate-800 flex items-center justify-between">
             <div className="flex items-center gap-2 overflow-hidden">
-              <img src={user.avatar} alt={user.name} className="w-7 h-7 rounded-full object-cover shrink-0" />
+              {user.avatar ? (
+                <img src={user.avatar} alt={user.name} className="w-7 h-7 rounded-full object-cover shrink-0" />
+              ) : (
+                <div className="w-7 h-7 rounded-full bg-[#2563EB]/20 border border-[#2563EB]/40 text-[#2563EB] text-[10px] font-bold flex items-center justify-center shrink-0">
+                  {user.name.charAt(0).toUpperCase()}
+                </div>
+              )}
               <div className="overflow-hidden">
                 <p className="text-xs font-medium text-slate-200 truncate">{user.name}</p>
                 <p className="text-[10px] text-slate-400 uppercase">{user.role}</p>

@@ -23,7 +23,7 @@ export const Login: React.FC<LoginProps> = ({ onLogin }) => {
     try {
       const supabase = getSupabase();
       if (!supabase) {
-        throw new Error('Supabase não configurado. Configure a URL e a chave pública nas integrações.');
+        throw new Error('Supabase não configurado neste ambiente (VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY).');
       }
 
       const { data, error } = await supabase.auth.signInWithPassword({

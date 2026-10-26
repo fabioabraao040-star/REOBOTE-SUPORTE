@@ -6,12 +6,14 @@ interface ServicesViewProps {
   services: MonitoredService[];
   onAddService: (service: MonitoredService) => void;
   onUpdateServiceStatus: (id: string, status: MonitoredService['status']) => void;
+  onTestService: (service: MonitoredService) => Promise<void>;
 }
 
 export const ServicesView: React.FC<ServicesViewProps> = ({
   services,
   onAddService,
-  onUpdateServiceStatus
+  onUpdateServiceStatus,
+  onTestService
 }) => {
   const [search, setSearch] = useState('');
   const [showAddModal, setShowAddModal] = useState(false);
@@ -26,9 +28,13 @@ export const ServicesView: React.FC<ServicesViewProps> = ({
     srv.endpoint.toLowerCase().includes(search.toLowerCase())
   );
 
-  const handleTestPing = (id: string) => {
-    setTestingId(id);
-    setTimeout(() => setTestingId(null), 800);
+  const handleTestPing = async (service: MonitoredService) => {
+    setTestingId(service.id);
+    try {
+      await onTestService(service);
+    } finally {
+      setTestingId(null);
+    }
   };
 
   const handleCreateService = (e: React.FormEvent) => {
@@ -114,7 +120,7 @@ export const ServicesView: React.FC<ServicesViewProps> = ({
 
               <div className="pt-4 border-t border-slate-800 flex items-center gap-2">
                 <button
-                  onClick={() => handleTestPing(srv.id)}
+                  onClick={() => handleTestPing(srv)}
                   disabled={isTesting}
                   className="flex-1 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-xs font-semibold text-slate-300 border border-slate-700 flex items-center justify-center gap-1.5 transition-colors"
                 >

@@ -7,6 +7,7 @@ import { ServicesView } from './components/ServicesView';
 import { IncidentsView } from './components/IncidentsView';
 import { LogsView } from './components/LogsView';
 import { SettingsView } from './components/SettingsView';
+import { ResetPassword } from './components/ResetPassword';
 
 import { initialSettings } from './lib/mockData';
 import { MonitoredService, Incident, SystemLog, IntegrationSettings, User } from './types';
@@ -14,22 +15,53 @@ import { getSupabase } from './lib/supabase';
 
 export default function App() {
   const [user, setUser] = useState<User | null>(null);
+  const [recoveryMode, setRecoveryMode] = useState(false);
   const [currentTab, setCurrentTab] = useState<string>('dashboard');
   
   const [services, setServices] = useState<MonitoredService[]>([]);
   const [incidents, setIncidents] = useState<Incident[]>([]);
   const [logs, setLogs] = useState<SystemLog[]>([]);
   const [settings, setSettings] = useState<IntegrationSettings>(initialSettings);
-  const [users, setUsers] = useState<User[]>([]);
   
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [toastMessage, setToastMessage] = useState<{ type: 'success' | 'error' | 'info'; text: string } | null>(null);
+
+  // Sincroniza os indicadores do menu com o estado real do backend.
+  // Antes, Supabase/Telegram apareciam sempre "pendentes" porque o objeto
+  // settings nunca era atualizado depois do carregamento inicial.
+  useEffect(() => {
+    let active = true;
+
+    fetch('/api/health')
+      .then((res) => (res.ok ? res.json() : Promise.reject(new Error('health'))))
+      .then((data) => {
+        if (!active) return;
+        setSettings((prev) => ({
+          ...prev,
+          supabaseConnected: Boolean(data.supabaseConfigured),
+          telegramConnected: Boolean(data.telegramConfigured)
+        }));
+      })
+      .catch(() => {
+        // Sem backend disponível, mantém os indicadores como estão.
+      });
+
+    return () => {
+      active = false;
+    };
+  }, []);
 
   useEffect(() => {
     const supabase = getSupabase();
     if (!supabase) return;
 
     let active = true;
+
+    // Link de recuperação do Supabase: o hash contém type=recovery.
+    // Sem esta tela o usuário entrava logado e não conseguia definir a senha.
+    if (window.location.hash.includes('type=recovery')) {
+      setRecoveryMode(true);
+    }
 
     const applySessionUser = (authUser: import('@supabase/supabase-js').User | null) => {
       if (!active) return;
@@ -58,7 +90,10 @@ export default function App() {
       applySessionUser(data.session?.user || null);
     });
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+      if (event === 'PASSWORD_RECOVERY') {
+        setRecoveryMode(true);
+      }
       applySessionUser(session?.user || null);
     });
 
@@ -159,7 +194,7 @@ export default function App() {
     }
   };
 
-  const getTelegramAuthHeaders = async (): Promise<Record<string, string>> => {
+  const getAuthHeaders = async (): Promise<Record<string, string>> => {
     const supabase = getSupabase();
     if (!supabase) {
       throw new Error('Supabase não configurado.');
@@ -176,23 +211,61 @@ export default function App() {
     };
   };
 
+  const sendTelegramAlert = async (incident: Incident): Promise<boolean> => {
+    try {
+      const response = await fetch('/api/telegram/send', {
+        method: 'POST',
+        headers: await getAuthHeaders(),
+        body: JSON.stringify({
+          message: `Incidente: *${incident.title}*\n${incident.description}`,
+          severity: incident.severity,
+          serviceName: incident.serviceName
+        })
+      });
+
+      const result = await response.json().catch(() => null);
+      return Boolean(response.ok && result?.success);
+    } catch (error) {
+      console.error('Falha ao enviar alerta ao Telegram:', error);
+      return false;
+    }
+  };
+
+  const markIncidentTelegramSent = async (id: string) => {
+    if (!user?.id) return;
+    const supabase = getSupabase();
+    if (!supabase) return;
+
+    const { error } = await supabase
+      .from('support_incidents')
+      .update({ telegram_sent: true })
+      .eq('id', id)
+      .eq('owner_id', user.id);
+
+    if (!error) {
+      setIncidents((current) =>
+        current.map((i) => (i.id === id ? { ...i, telegramSent: true } : i))
+      );
+    }
+  };
+
   const handleTestTelegram = async () => {
     try {
       showToast('info', 'Enviando teste via Telegram Bot...');
       const res = await fetch('/api/telegram/send', {
         method: 'POST',
-        headers: await getTelegramAuthHeaders(),
+        headers: await getAuthHeaders(),
         body: JSON.stringify({
           message: '🚨 Teste de alerta automático via REOBOTE SUPORTE!',
           severity: 'critical',
           serviceName: 'Telegram Bot'
         })
       });
-      const data = await res.json();
-      if (data.success) {
+      const data = await res.json().catch(() => null);
+      if (data?.success) {
         showToast('success', 'Mensagem enviada com sucesso no Telegram!');
       } else {
-        showToast('error', data.error || 'Erro ao enviar Telegram.');
+        showToast('error', data?.error || 'Erro ao enviar Telegram.');
       }
     } catch (err: unknown) {
       showToast('error', 'Falha ao enviar o teste do Telegram. Verifique a API e as configurações.');
@@ -200,24 +273,15 @@ export default function App() {
   };
 
   const handleSendTelegramAlert = async (incident: Incident) => {
-    try {
-      const response = await fetch('/api/telegram/send', {
-        method: 'POST',
-        headers: await getTelegramAuthHeaders(),
-        body: JSON.stringify({
-          message: `Incidente: *${incident.title}*\n${incident.description}`,
-          severity: incident.severity,
-          serviceName: incident.serviceName
-        })
-      });
-      const result = await response.json();
-      if (!response.ok || !result.success) {
-        throw new Error(result.error || 'Falha no envio.');
-      }
-      showToast('success', 'Alerta enviado ao Telegram!');
-    } catch (e) {
+    const sent = await sendTelegramAlert(incident);
+
+    if (!sent) {
       showToast('error', 'Não foi possível confirmar o envio do alerta ao Telegram.');
+      return;
     }
+
+    showToast('success', 'Alerta enviado ao Telegram!');
+    await markIncidentTelegramSent(incident.id);
   };
 
   const handleAddService = async (newSrv: MonitoredService) => {
@@ -250,10 +314,21 @@ export default function App() {
     showToast('success', 'Serviço salvo no Supabase.');
   };
 
-  const handleUpdateServiceStatus = async (id: string, status: MonitoredService['status']) => {
-    if (!user?.id) return;
+  const persistServiceStatus = async (
+    id: string,
+    status: MonitoredService['status'],
+    notify = true
+  ): Promise<boolean> => {
+    if (!user?.id) {
+      if (notify) showToast('error', 'Entre no sistema para atualizar o serviço.');
+      return false;
+    }
+
     const supabase = getSupabase();
-    if (!supabase) return showToast('error', 'Supabase não configurado.');
+    if (!supabase) {
+      if (notify) showToast('error', 'Supabase não configurado.');
+      return false;
+    }
 
     const checkedAt = new Date().toISOString();
     const { error } = await supabase.from('monitored_services')
@@ -262,16 +337,51 @@ export default function App() {
 
     if (error) {
       console.error('Falha ao atualizar serviço:', error);
-      return showToast('error', 'Não foi possível atualizar o serviço no banco.');
+      if (notify) showToast('error', 'Não foi possível atualizar o serviço no banco.');
+      return false;
     }
 
     setServices(current => current.map(s => s.id === id
       ? { ...s, status, lastChecked: new Date(checkedAt).toLocaleString('pt-BR') }
       : s));
-    showToast('success', 'Status salvo no Supabase.');
+
+    if (notify) showToast('success', 'Status salvo no Supabase.');
+    return true;
   };
 
-  const handleCreateIncident = async (newInc: Incident) => {
+  const handleUpdateServiceStatus = (id: string, status: MonitoredService['status']) => {
+    void persistServiceStatus(id, status);
+  };
+
+  const handleTestService = async (service: MonitoredService) => {
+    try {
+      const response = await fetch('/api/check-service', {
+        method: 'POST',
+        headers: await getAuthHeaders(),
+        body: JSON.stringify({ url: service.endpoint })
+      });
+
+      const result = await response.json().catch(() => null);
+      if (!response.ok) {
+        throw new Error(result?.error || 'Falha ao testar a conexão.');
+      }
+
+      const nextStatus: MonitoredService['status'] = result?.ok ? 'healthy' : 'down';
+      await persistServiceStatus(service.id, nextStatus, false);
+
+      showToast(
+        result?.ok ? 'success' : 'error',
+        result?.ok
+          ? `Conexão OK com ${service.name} (HTTP ${result.status}).`
+          : `${service.name} não respondeu (HTTP ${result.status || 'sem resposta'}).`
+      );
+    } catch (error) {
+      console.error('Falha no teste de conexão:', error);
+      showToast('error', error instanceof Error ? error.message : 'Falha ao testar a conexão.');
+    }
+  };
+
+  const handleCreateIncident = async (newInc: Incident, notifyTelegram: boolean) => {
     if (!user?.id) return showToast('error', 'Faça login antes de registrar um incidente.');
     const supabase = getSupabase();
     if (!supabase) return showToast('error', 'Supabase não configurado.');
@@ -286,19 +396,32 @@ export default function App() {
       telegram_sent: false
     }).select().single();
 
-    if (error) {
+    if (error || !data) {
       console.error('Falha ao salvar incidente:', error);
       return showToast('error', 'Não foi possível salvar o incidente no banco.');
     }
 
-    setIncidents(current => [{
+    const saved: Incident = {
       ...newInc,
       id: data.id,
       serviceId: data.service_id || '',
       createdAt: data.created_at,
-      telegramSent: Boolean(data.telegram_sent)
-    }, ...current]);
+      telegramSent: false
+    };
+
+    setIncidents(current => [saved, ...current]);
     showToast('success', 'Incidente salvo no Supabase.');
+
+    if (!notifyTelegram) return;
+
+    // Só marca telegram_sent no banco depois que o envio for confirmado.
+    const sent = await sendTelegramAlert(saved);
+    if (sent) {
+      await markIncidentTelegramSent(saved.id);
+      showToast('success', 'Incidente registrado e alerta enviado ao Telegram.');
+    } else {
+      showToast('error', 'Incidente salvo, mas o alerta do Telegram falhou.');
+    }
   };
 
   const handleUpdateIncidentStatus = async (id: string, status: Incident['status']) => {
@@ -356,11 +479,6 @@ export default function App() {
     showToast('success', 'Log atualizado no Supabase.');
   };
 
-  const handleAddUser = (newUser: User) => {
-    setUsers([...users, newUser]);
-    showToast('success', 'Usuário adicionado.');
-  };
-
   const getTabTitle = (tab: string) => {
     switch (tab) {
       case 'dashboard': return 'Dashboard Principal';
@@ -371,6 +489,17 @@ export default function App() {
       default: return 'REOBOTE SUPORTE';
     }
   };
+
+  if (recoveryMode) {
+    return (
+      <ResetPassword
+        onDone={() => {
+          setRecoveryMode(false);
+          setUser(null);
+        }}
+      />
+    );
+  }
 
   if (!user) {
     return <Login onLogin={(u) => { setUser(u); showToast('success', `Bem-vindo, ${u.name}!`); }} />;
@@ -389,7 +518,8 @@ export default function App() {
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
         <Navbar 
           currentTabTitle={getTabTitle(currentTab)} 
-          settings={settings}
+          services={services}
+          incidents={incidents}
           onTestTelegram={handleTestTelegram}
           onRefreshData={handleRefreshData}
           isRefreshing={isRefreshing}
@@ -424,6 +554,7 @@ export default function App() {
               services={services}
               onAddService={handleAddService}
               onUpdateServiceStatus={handleUpdateServiceStatus}
+              onTestService={handleTestService}
             />
           )}
 
@@ -446,11 +577,7 @@ export default function App() {
           )}
 
           {currentTab === 'settings' && (
-            <SettingsView 
-              settings={settings}
-              users={users}
-              onAddUser={handleAddUser}
-            />
+            <SettingsView currentUser={user} />
           )}
         </main>
       </div>

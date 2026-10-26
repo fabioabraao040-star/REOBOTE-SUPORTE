@@ -1,5 +1,8 @@
 import express from 'express';
+import type { Request } from 'express';
 import dotenv from 'dotenv';
+import { lookup } from 'node:dns/promises';
+import { isIP } from 'node:net';
 import { createClient } from '@supabase/supabase-js';
 
 dotenv.config();
@@ -23,6 +26,74 @@ const supabaseAuth =
       })
     : null;
 
+type AuthResult =
+  | { ok: true; user: import('@supabase/supabase-js').User }
+  | { ok: false; status: number; error: string };
+
+// Valida o Bearer token do Supabase e devolve o usuário autenticado.
+// Reutilizado por todas as rotas de backend que exigem sessão.
+async function getAuthenticatedUser(req: Request): Promise<AuthResult> {
+  if (!supabaseAuth) {
+    return {
+      ok: false,
+      status: 503,
+      error: 'Autenticação do Supabase não configurada no servidor.'
+    };
+  }
+
+  const authorization = req.header('authorization') || '';
+  const match = authorization.match(/^Bearer\s+(\S+)$/i);
+
+  if (!match) {
+    return {
+      ok: false,
+      status: 401,
+      error: 'Sessão necessária. Entre novamente no sistema.'
+    };
+  }
+
+  const { data, error } = await supabaseAuth.auth.getUser(match[1]);
+
+  if (error || !data.user) {
+    return {
+      ok: false,
+      status: 401,
+      error: 'Sessão inválida ou expirada. Entre novamente.'
+    };
+  }
+
+  return { ok: true, user: data.user };
+}
+
+// Bloqueia faixas privadas/reservadas para evitar SSRF no teste de endpoints.
+function isPrivateAddress(address: string): boolean {
+  const version = isIP(address);
+  const value = address.toLowerCase();
+
+  if (version === 4) {
+    const [a, b] = value.split('.').map(Number);
+    if (a === 0 || a === 10 || a === 127) return true;
+    if (a === 169 && b === 254) return true; // link-local
+    if (a === 172 && b >= 16 && b <= 31) return true;
+    if (a === 192 && b === 168) return true;
+    if (a === 100 && b >= 64 && b <= 127) return true; // CGNAT
+    if (a >= 224) return true; // multicast/reservado
+    return false;
+  }
+
+  if (version === 6) {
+    if (value === '::' || value === '::1') return true;
+    if (value.startsWith('fc') || value.startsWith('fd')) return true; // ULA
+    if (/^fe[89ab]/.test(value)) return true; // link-local
+    const mapped = value.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
+    if (mapped) return isPrivateAddress(mapped[1]);
+    return false;
+  }
+
+  // Host que não é IP (já resolvido antes) é tratado como inseguro.
+  return true;
+}
+
 app.get('/api/health', (_req, res) => {
   const telegramConfigured =
     !!process.env.TELEGRAM_BOT_TOKEN && !!process.env.TELEGRAM_CHAT_ID;
@@ -40,34 +111,15 @@ app.get('/api/health', (_req, res) => {
 
 app.post('/api/telegram/send', async (req, res) => {
   try {
-    if (!supabaseAuth) {
-      return res.status(503).json({
+    const auth = await getAuthenticatedUser(req);
+    if (!auth.ok) {
+      return res.status(auth.status).json({
         success: false,
-        error: 'Autenticação do Supabase não configurada no servidor.'
+        error: auth.error
       });
     }
 
-    const authorization = req.header('authorization') || '';
-    const match = authorization.match(/^Bearer\s+(\S+)$/i);
-
-    if (!match) {
-      return res.status(401).json({
-        success: false,
-        error: 'Sessão necessária. Entre novamente no sistema.'
-      });
-    }
-
-    const { data: authData, error: authError } =
-      await supabaseAuth.auth.getUser(match[1]);
-
-    if (authError || !authData.user) {
-      return res.status(401).json({
-        success: false,
-        error: 'Sessão inválida ou expirada. Entre novamente.'
-      });
-    }
-
-    const role = authData.user.app_metadata?.role;
+    const role = auth.user.app_metadata?.role;
     if (role !== 'admin' && role !== 'operator') {
       return res.status(403).json({
         success: false,
@@ -154,6 +206,95 @@ app.post('/api/telegram/send', async (req, res) => {
       error: 'Erro interno ao processar o alerta.'
     });
   }
+});
+
+// Teste real de conectividade de um serviço monitorado.
+// Roda no servidor para evitar bloqueios de CORS do navegador e valida a URL
+// contra SSRF (não permite acessar localhost/redes privadas de terceiros).
+app.post('/api/check-service', async (req, res) => {
+  const auth = await getAuthenticatedUser(req);
+  if (!auth.ok) {
+    return res.status(auth.status).json({ ok: false, error: auth.error });
+  }
+
+  const rawUrl = req.body?.url;
+  if (typeof rawUrl !== 'string' || !rawUrl.trim() || rawUrl.length > 2048) {
+    return res.status(400).json({ ok: false, error: 'Endpoint inválido.' });
+  }
+
+  const host = req.get('host');
+  if (!host) {
+    return res.status(400).json({ ok: false, error: 'Host da requisição ausente.' });
+  }
+
+  const forwardedProto = (req.header('x-forwarded-proto') || req.protocol || 'http')
+    .split(',')[0]
+    .trim();
+  const origin = `${forwardedProto}://${host}`;
+
+  let target: URL;
+  try {
+    target = new URL(rawUrl.trim(), origin);
+  } catch {
+    return res.status(400).json({ ok: false, error: 'Endpoint inválido.' });
+  }
+
+  if (target.protocol !== 'http:' && target.protocol !== 'https:') {
+    return res.status(400).json({ ok: false, error: 'Use um endpoint http(s).' });
+  }
+
+  if (target.username || target.password) {
+    return res.status(400).json({ ok: false, error: 'Endpoint não pode conter credenciais.' });
+  }
+
+  const isOwnHost = target.host.toLowerCase() === host.toLowerCase();
+
+  if (!isOwnHost) {
+    if (target.hostname.toLowerCase() === 'localhost') {
+      return res.status(403).json({ ok: false, error: 'Endereço não permitido.' });
+    }
+
+    if (isIP(target.hostname)) {
+      if (isPrivateAddress(target.hostname)) {
+        return res.status(403).json({ ok: false, error: 'Endereço não permitido.' });
+      }
+    } else {
+      try {
+        const addresses = await lookup(target.hostname, { all: true, verbatim: true });
+        if (!addresses.length || addresses.some((entry) => isPrivateAddress(entry.address))) {
+          return res.status(403).json({ ok: false, error: 'Endereço não permitido.' });
+        }
+      } catch {
+        return res.json({ ok: false, status: 0, error: 'Não foi possível resolver o host.' });
+      }
+    }
+  }
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 5000);
+
+  try {
+    const response = await fetch(target, {
+      method: 'GET',
+      redirect: 'manual',
+      signal: controller.signal,
+      headers: { 'user-agent': 'ReoboteSuporte/1.0 (health-check)' }
+    });
+
+    return res.json({
+      ok: response.status >= 200 && response.status < 500,
+      status: response.status
+    });
+  } catch {
+    return res.json({ ok: false, status: 0 });
+  } finally {
+    clearTimeout(timer);
+  }
+});
+
+// Qualquer rota /api desconhecida responde JSON (nunca o index.html do SPA).
+app.use('/api', (_req, res) => {
+  res.status(404).json({ error: 'Rota da API não encontrada.' });
 });
 
 export default app;
