@@ -4,6 +4,7 @@ import dotenv from 'dotenv';
 import { lookup } from 'node:dns/promises';
 import { isIP } from 'node:net';
 import { createClient } from '@supabase/supabase-js';
+import { checkReoboteSystems } from './reoboteSystems.js';
 
 dotenv.config();
 
@@ -63,6 +64,36 @@ async function getAuthenticatedUser(req: Request): Promise<AuthResult> {
   }
 
   return { ok: true, user: data.user };
+}
+
+// Limite simples por usuário (por instância) para a consulta de integração.
+// Evita que o painel ou um clique repetido sobrecarregue o REOBOTE SISTEMAS.
+const SYSTEMS_CHECK_WINDOW_MS = 60_000;
+const SYSTEMS_CHECK_MAX_PER_USER = 30;
+const systemsCheckQuota = new Map<string, { count: number; resetAt: number }>();
+
+function consumeSystemsCheckQuota(userId: string): boolean {
+  const now = Date.now();
+
+  if (systemsCheckQuota.size > 1000) {
+    for (const [key, bucket] of systemsCheckQuota) {
+      if (bucket.resetAt <= now) systemsCheckQuota.delete(key);
+    }
+  }
+
+  const bucket = systemsCheckQuota.get(userId);
+  if (!bucket || bucket.resetAt <= now) {
+    systemsCheckQuota.set(userId, {
+      count: 1,
+      resetAt: now + SYSTEMS_CHECK_WINDOW_MS
+    });
+    return true;
+  }
+
+  if (bucket.count >= SYSTEMS_CHECK_MAX_PER_USER) return false;
+
+  bucket.count += 1;
+  return true;
 }
 
 // Bloqueia faixas privadas/reservadas para evitar SSRF no teste de endpoints.
@@ -290,6 +321,26 @@ app.post('/api/check-service', async (req, res) => {
   } finally {
     clearTimeout(timer);
   }
+});
+
+// Consulta autenticada do painel: o navegador fala com este backend, nunca
+// diretamente com o REOBOTE SISTEMAS (o segredo fica só no servidor).
+app.get('/api/integrations/reobote-systems', async (req, res) => {
+  const auth = await getAuthenticatedUser(req);
+  if (!auth.ok) {
+    return res.status(auth.status).json({ error: auth.error });
+  }
+
+  if (!consumeSystemsCheckQuota(auth.user.id)) {
+    return res.status(429).json({
+      error: 'Muitas verificações em pouco tempo. Aguarde um minuto e tente novamente.'
+    });
+  }
+
+  const result = await checkReoboteSystems({ timeoutMs: 8000 });
+
+  res.setHeader('Cache-Control', 'no-store');
+  return res.json(result);
 });
 
 // Qualquer rota /api desconhecida responde JSON (nunca o index.html do SPA).

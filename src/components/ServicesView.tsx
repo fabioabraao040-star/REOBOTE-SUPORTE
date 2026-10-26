@@ -1,9 +1,13 @@
 import React, { useState } from 'react';
 import { Server, Plus, RefreshCw, CheckCircle2, Search, Database, Activity, Send } from 'lucide-react';
-import { MonitoredService } from '../types';
+import { MonitoredService, SystemsIntegrationStatus } from '../types';
+import { SystemsIntegrationCard } from './SystemsIntegrationCard';
 
 interface ServicesViewProps {
   services: MonitoredService[];
+  systemsStatus: SystemsIntegrationStatus | null;
+  systemsChecking: boolean;
+  onCheckSystems: () => void;
   onAddService: (service: MonitoredService) => void;
   onUpdateServiceStatus: (id: string, status: MonitoredService['status']) => void;
   onTestService: (service: MonitoredService) => Promise<void>;
@@ -11,6 +15,9 @@ interface ServicesViewProps {
 
 export const ServicesView: React.FC<ServicesViewProps> = ({
   services,
+  systemsStatus,
+  systemsChecking,
+  onCheckSystems,
   onAddService,
   onUpdateServiceStatus,
   onTestService
@@ -72,6 +79,12 @@ export const ServicesView: React.FC<ServicesViewProps> = ({
           <span>Adicionar Serviço</span>
         </button>
       </div>
+
+      <SystemsIntegrationCard
+        status={systemsStatus}
+        checking={systemsChecking}
+        onCheck={onCheckSystems}
+      />
 
       <div className="flex items-center justify-between bg-[#1E293B] p-4 rounded-2xl border border-slate-800">
         <div className="relative w-full sm:w-80">

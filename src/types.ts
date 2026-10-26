@@ -58,3 +58,49 @@ export interface IntegrationSettings {
   telegramChatId: string;
   telegramConnected: boolean;
 }
+
+export type SystemsIntegrationState =
+  | 'operational'
+  | 'degraded'
+  | 'unavailable'
+  | 'not_configured';
+
+export type SystemsRemoteStatus = 'operational' | 'degraded' | 'unavailable';
+export type SystemsWhatsAppStatus =
+  | 'connected'
+  | 'configured'
+  | 'not_configured'
+  | 'unavailable';
+
+export interface SystemsIntegrationStatus {
+  configured: boolean;
+  state: SystemsIntegrationState;
+  checkedAt: string;
+  latencyMs: number | null;
+  error: string | null;
+  remote: null | {
+    service: string;
+    status: 'operational' | 'degraded';
+    checkedAt: string;
+    checks: {
+      application: {
+        status: SystemsRemoteStatus;
+        uptimeSeconds: number | null;
+      };
+      api: {
+        status: SystemsRemoteStatus;
+      };
+      monitoringEndpoint: {
+        status: SystemsRemoteStatus;
+      };
+      supabase: {
+        status: SystemsRemoteStatus;
+        latencyMs: number | null;
+      };
+      whatsapp: {
+        status: SystemsWhatsAppStatus;
+        lastCheck: string | null;
+      };
+    };
+  };
+}

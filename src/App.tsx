@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Sidebar } from './components/Sidebar';
 import { Navbar } from './components/Navbar';
 import { Login } from './components/Login';
@@ -10,8 +10,57 @@ import { SettingsView } from './components/SettingsView';
 import { ResetPassword } from './components/ResetPassword';
 
 import { initialSettings } from './lib/mockData';
-import { MonitoredService, Incident, SystemLog, IntegrationSettings, User } from './types';
+import {
+  MonitoredService,
+  Incident,
+  SystemLog,
+  IntegrationSettings,
+  User,
+  LogSeverity,
+  SystemsIntegrationStatus,
+  SystemsIntegrationState
+} from './types';
 import { getSupabase } from './lib/supabase';
+
+const SYSTEMS_LOG_MARKER_KEY = 'reobote.systems.integration-log-marker';
+const SYSTEMS_ALERT_MARKER_KEY = 'reobote.systems.integration-alert-at';
+
+function readIntegrationLogMarker(): { key: string; at: number } | null {
+  try {
+    const raw = localStorage.getItem(SYSTEMS_LOG_MARKER_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as { key?: unknown; at?: unknown };
+    return typeof parsed.key === 'string' && typeof parsed.at === 'number'
+      ? { key: parsed.key, at: parsed.at }
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeIntegrationLogMarker(marker: { key: string; at: number }) {
+  try {
+    localStorage.setItem(SYSTEMS_LOG_MARKER_KEY, JSON.stringify(marker));
+  } catch {
+    // Sem persistência local: a deduplicação continua valendo só nesta sessão.
+  }
+}
+
+function readLastIntegrationAlertAt(): number {
+  try {
+    return Number(localStorage.getItem(SYSTEMS_ALERT_MARKER_KEY) || 0) || 0;
+  } catch {
+    return 0;
+  }
+}
+
+function writeLastIntegrationAlertAt(at: number) {
+  try {
+    localStorage.setItem(SYSTEMS_ALERT_MARKER_KEY, String(at));
+  } catch {
+    // Sem persistência local: o cooldown continua valendo só nesta sessão.
+  }
+}
 
 export default function App() {
   const [user, setUser] = useState<User | null>(null);
@@ -25,6 +74,9 @@ export default function App() {
   
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [toastMessage, setToastMessage] = useState<{ type: 'success' | 'error' | 'info'; text: string } | null>(null);
+  const [systemsStatus, setSystemsStatus] = useState<SystemsIntegrationStatus | null>(null);
+  const [systemsChecking, setSystemsChecking] = useState(false);
+  const systemsCheckInFlight = useRef(false);
 
   // Sincroniza os indicadores do menu com o estado real do backend.
   // Antes, Supabase/Telegram apareciam sempre "pendentes" porque o objeto
@@ -211,16 +263,16 @@ export default function App() {
     };
   };
 
-  const sendTelegramAlert = async (incident: Incident): Promise<boolean> => {
+  const sendTelegramMessage = async (
+    message: string,
+    severity: string,
+    serviceName: string
+  ): Promise<boolean> => {
     try {
       const response = await fetch('/api/telegram/send', {
         method: 'POST',
         headers: await getAuthHeaders(),
-        body: JSON.stringify({
-          message: `Incidente: *${incident.title}*\n${incident.description}`,
-          severity: incident.severity,
-          serviceName: incident.serviceName
-        })
+        body: JSON.stringify({ message, severity, serviceName })
       });
 
       const result = await response.json().catch(() => null);
@@ -230,6 +282,13 @@ export default function App() {
       return false;
     }
   };
+
+  const sendTelegramAlert = async (incident: Incident): Promise<boolean> =>
+    sendTelegramMessage(
+      `Incidente: *${incident.title}*\n${incident.description}`,
+      incident.severity,
+      incident.serviceName
+    );
 
   const markIncidentTelegramSent = async (id: string) => {
     if (!user?.id) return;
@@ -380,6 +439,162 @@ export default function App() {
       showToast('error', error instanceof Error ? error.message : 'Falha ao testar a conexão.');
     }
   };
+
+  const registerIntegrationIssue = async (
+    state: Extract<SystemsIntegrationState, 'degraded' | 'unavailable'>,
+    message: string
+  ) => {
+    if (!user?.id) return;
+
+    const now = Date.now();
+    const safeMessage = message.slice(0, 500);
+    const markerKey = `${user.id}:${state}:${safeMessage.slice(0, 120)}`;
+    const marker = readIntegrationLogMarker();
+    const shouldRecord = !marker || marker.key !== markerKey || now - marker.at >= 10 * 60_000;
+
+    if (shouldRecord) {
+      writeIntegrationLogMarker({ key: markerKey, at: now });
+
+      const supabase = getSupabase();
+      if (supabase) {
+        const severity: LogSeverity = state === 'unavailable' ? 'error' : 'warn';
+        const { data, error } = await supabase
+          .from('support_logs')
+          .insert({
+            owner_id: user.id,
+            origin: 'Integração REOBOTE SISTEMAS',
+            severity,
+            message: safeMessage,
+            resolved: false
+          })
+          .select('id,created_at,origin,severity,message,resolved')
+          .single();
+
+        if (error) {
+          console.error('Falha ao registrar log da integração:', error.message);
+        } else if (data) {
+          setLogs((current) => [
+            {
+              id: data.id,
+              timestamp: data.created_at,
+              origin: data.origin,
+              severity: data.severity,
+              message: data.message,
+              resolved: Boolean(data.resolved)
+            },
+            ...current
+          ]);
+        }
+      }
+    }
+
+    // O alerta tem cooldown próprio: se o Telegram ficou disponível depois do
+    // primeiro erro, ainda é possível notificar a indisponibilidade em curso.
+    if (!settings.telegramConnected || user.role === 'viewer') return;
+    if (now - readLastIntegrationAlertAt() < 15 * 60_000) return;
+
+    const sent = await sendTelegramMessage(
+      `Falha na integração com o REOBOTE SISTEMAS:\n${safeMessage}`,
+      state === 'unavailable' ? 'critical' : 'warning',
+      'REOBOTE SISTEMAS'
+    );
+
+    if (sent) {
+      writeLastIntegrationAlertAt(now);
+    }
+  };
+
+  const handleCheckSystems = async (manual = false) => {
+    if (!user?.id) {
+      if (manual) showToast('error', 'Entre no sistema para verificar a integração.');
+      return;
+    }
+
+    if (systemsCheckInFlight.current) {
+      if (manual) showToast('info', 'Já existe uma verificação em andamento.');
+      return;
+    }
+
+    systemsCheckInFlight.current = true;
+    if (manual) setSystemsChecking(true);
+
+    try {
+      const response = await fetch('/api/integrations/reobote-systems', {
+        method: 'GET',
+        headers: await getAuthHeaders(),
+        cache: 'no-store'
+      });
+
+      const data = (await response.json().catch(() => null)) as SystemsIntegrationStatus | null;
+
+      if (!response.ok || !data) {
+        throw new Error(
+          data?.error || `Falha ao consultar o REOBOTE SISTEMAS (HTTP ${response.status}).`
+        );
+      }
+
+      setSystemsStatus(data);
+
+      if (data.state === 'unavailable' || data.state === 'degraded') {
+        await registerIntegrationIssue(
+          data.state,
+          data.error ||
+            (data.state === 'unavailable'
+              ? 'REOBOTE SISTEMAS não respondeu.'
+              : 'REOBOTE SISTEMAS reportou degradação.')
+        );
+      }
+
+      if (manual) {
+        if (data.state === 'operational') {
+          showToast('success', 'REOBOTE SISTEMAS está operacional.');
+        } else if (data.state === 'not_configured') {
+          showToast('info', 'Integração ainda não configurada no servidor.');
+        } else {
+          showToast('error', data.error || 'REOBOTE SISTEMAS não está operacional.');
+        }
+      }
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : 'Falha ao consultar o REOBOTE SISTEMAS.';
+
+      setSystemsStatus({
+        configured: true,
+        state: 'unavailable',
+        checkedAt: new Date().toISOString(),
+        latencyMs: null,
+        error: message,
+        remote: null
+      });
+
+      // Falha de sessão é tratada no fluxo de login; as demais entram no log.
+      if (!/sess[ãa]o/i.test(message)) {
+        await registerIntegrationIssue('unavailable', message);
+      }
+
+      if (manual) showToast('error', message);
+    } finally {
+      systemsCheckInFlight.current = false;
+      if (manual) setSystemsChecking(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!user?.id) {
+      setSystemsStatus(null);
+      return;
+    }
+
+    void handleCheckSystems(false);
+    // A aba pode ficar em segundo plano; o monitoramento continua enquanto
+    // houver sessão autenticada, para não mascarar indisponibilidades.
+    const interval = setInterval(() => {
+      void handleCheckSystems(false);
+    }, 60_000);
+
+    return () => clearInterval(interval);
+    // A verificação é refeita quando o usuário ou o estado do Telegram muda.
+  }, [user?.id, settings.telegramConnected]);
 
   const handleCreateIncident = async (newInc: Incident, notifyTelegram: boolean) => {
     if (!user?.id) return showToast('error', 'Faça login antes de registrar um incidente.');
@@ -552,6 +767,9 @@ export default function App() {
           {currentTab === 'services' && (
             <ServicesView 
               services={services}
+              systemsStatus={systemsStatus}
+              systemsChecking={systemsChecking}
+              onCheckSystems={() => handleCheckSystems(true)}
               onAddService={handleAddService}
               onUpdateServiceStatus={handleUpdateServiceStatus}
               onTestService={handleTestService}
