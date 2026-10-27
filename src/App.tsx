@@ -22,6 +22,7 @@ import {
   SupabaseConnectivityResult,
   SystemsIntegrationStatus,
   SystemsIntegrationState,
+  TelegramTestResult,
   TestFeedback
 } from './types';
 import { getSupabase } from './lib/supabase';
@@ -107,8 +108,12 @@ export default function App() {
   const automaticAlertTestInFlight = useRef(false);
   const securityTestInFlight = useRef(false);
 
+  const [telegramTest, setTelegramTest] = useState<TestFeedback<TelegramTestResult>>(
+    createIdleTestFeedback
+  );
   const [telegramTesting, setTelegramTesting] = useState(false);
   const [lastTelegramTestAt, setLastTelegramTestAt] = useState<string | null>(null);
+  const telegramTestInFlight = useRef(false);
 
   // Sincroniza os indicadores do menu com o estado real do backend.
   // Antes, Supabase/Telegram apareciam sempre "pendentes" porque o objeto
@@ -341,11 +346,23 @@ export default function App() {
   };
 
   const handleTestTelegram = async () => {
-    if (telegramTesting) return;
+    if (telegramTestInFlight.current) return;
 
+    if (!user) {
+      showToast('error', 'Entre no sistema para enviar o teste do Telegram.');
+      return;
+    }
+
+    if (user.role === 'viewer') {
+      showToast('error', 'Seu perfil não tem permissão para executar testes controlados.');
+      return;
+    }
+
+    telegramTestInFlight.current = true;
     const attemptedAt = new Date().toISOString();
     setTelegramTesting(true);
     setLastTelegramTestAt(attemptedAt);
+    setTelegramTest({ status: 'running', result: null, error: null, checkedAt: null });
 
     try {
       showToast('info', 'Enviando teste via Telegram Bot...');
@@ -358,21 +375,35 @@ export default function App() {
           serviceName: 'Telegram Bot'
         })
       });
-      const data = await res.json().catch(() => null);
+      const data = (await res.json().catch(() => null)) as
+        | (Partial<TelegramTestResult> & { error?: string })
+        | null;
       const time = new Date(attemptedAt).toLocaleTimeString('pt-BR');
+      const checkedAt =
+        typeof data?.checkedAt === 'string' ? data.checkedAt : new Date().toISOString();
 
-      if (data?.success) {
+      if (res.ok && data?.success === true && data?.simulated === false) {
+        const result: TelegramTestResult = { success: true, simulated: false, checkedAt };
+        setTelegramTest({ status: 'success', result, error: null, checkedAt });
         showToast('success', `Mensagem enviada com sucesso no Telegram às ${time}.`);
       } else {
-        showToast('error', `${getResponseError(data, 'Erro ao enviar Telegram.')} (tentativa às ${time})`);
+        const message = getResponseError(data, 'Erro ao enviar Telegram.');
+        setTelegramTest({ status: 'error', result: null, error: message, checkedAt });
+        showToast('error', `${message} (tentativa às ${time})`);
       }
     } catch {
       const time = new Date(attemptedAt).toLocaleTimeString('pt-BR');
-      showToast(
-        'error',
-        `Falha ao enviar o teste do Telegram. Verifique a API e as configurações (tentativa às ${time}).`
-      );
+      const message =
+        'Falha ao enviar o teste do Telegram. Verifique a API e as configurações.';
+      setTelegramTest({
+        status: 'error',
+        result: null,
+        error: message,
+        checkedAt: new Date().toISOString()
+      });
+      showToast('error', `${message} (tentativa às ${time})`);
     } finally {
+      telegramTestInFlight.current = false;
       setTelegramTesting(false);
     }
   };
@@ -1027,9 +1058,11 @@ export default function App() {
               systemsChecking={systemsChecking}
               onCheckSystems={() => handleCheckSystems(true)}
               canRunTests={user.role === 'admin' || user.role === 'operator'}
+              telegramTest={telegramTest}
               supabaseTest={supabaseTest}
               automaticAlertTest={automaticAlertTest}
               securityTest={securityTest}
+              onTestTelegram={handleTestTelegram}
               onTestSupabase={handleTestSupabase}
               onTestAutomaticAlert={handleTestAutomaticAlert}
               onTestIntegrationSecurity={handleTestIntegrationSecurity}

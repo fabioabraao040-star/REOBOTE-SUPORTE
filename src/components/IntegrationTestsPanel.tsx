@@ -4,6 +4,7 @@ import {
   CheckCircle2,
   Clock,
   Database,
+  MessageCircle,
   RefreshCw,
   Send,
   ShieldCheck,
@@ -13,21 +14,25 @@ import type {
   AutomaticAlertTestResult,
   IntegrationSecurityResult,
   SupabaseConnectivityResult,
+  TelegramTestResult,
   TestFeedback,
   TestFeedbackStatus,
 } from '../types';
 
 interface IntegrationTestsPanelProps {
   canRun: boolean;
+  telegramTest: TestFeedback<TelegramTestResult>;
   supabaseTest: TestFeedback<SupabaseConnectivityResult>;
   automaticAlertTest: TestFeedback<AutomaticAlertTestResult>;
   securityTest: TestFeedback<IntegrationSecurityResult>;
+  onTestTelegram: () => void;
   onTestSupabase: () => void;
   onTestAutomaticAlert: () => void;
   onTestIntegrationSecurity: () => void;
 }
 
 interface TestCardProps<T> {
+  testId: string;
   title: string;
   description: string;
   icon: React.ReactNode;
@@ -98,6 +103,7 @@ function FeedbackIcon({ status }: { status: TestFeedbackStatus }) {
 }
 
 function TestCard<T>({
+  testId,
   title,
   description,
   icon,
@@ -124,6 +130,7 @@ function TestCard<T>({
 
       <button
         type="button"
+        data-testid={testId}
         onClick={onRun}
         disabled={disabled}
         aria-busy={running}
@@ -206,6 +213,16 @@ function SecurityDetails({ result }: { result: IntegrationSecurityResult }) {
   );
 }
 
+function TelegramDetails({ result }: { result: TelegramTestResult }) {
+  return (
+    <p className="text-[10px] leading-relaxed">
+      Mensagem de teste processada pelo endpoint real do Telegram.
+      {result.success ? ' Envio confirmado.' : ' Envio não confirmado.'} Nenhum incidente
+      ou serviço foi alterado.
+    </p>
+  );
+}
+
 function AlertDetails({ result }: { result: AutomaticAlertTestResult }) {
   return (
     <p className="text-[10px] leading-relaxed">
@@ -218,14 +235,19 @@ function AlertDetails({ result }: { result: AutomaticAlertTestResult }) {
 
 export const IntegrationTestsPanel: React.FC<IntegrationTestsPanelProps> = ({
   canRun,
+  telegramTest,
   supabaseTest,
   automaticAlertTest,
   securityTest,
+  onTestTelegram,
   onTestSupabase,
   onTestAutomaticAlert,
   onTestIntegrationSecurity,
 }) => (
-  <section className="p-5 rounded-3xl bg-[#1E293B] border border-slate-800 space-y-4">
+  <section
+    data-testid="integration-tests-panel"
+    className="p-5 rounded-3xl bg-[#1E293B] border border-[#2563EB]/30 space-y-4"
+  >
     <div>
       <h3 className="text-base font-black text-[#F8FAFC]">Testes controlados</h3>
       <p className="text-xs text-slate-400 mt-0.5">
@@ -240,8 +262,21 @@ export const IntegrationTestsPanel: React.FC<IntegrationTestsPanelProps> = ({
       </div>
     )}
 
-    <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
+    <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3">
       <TestCard
+        testId="test-telegram"
+        title="Telegram"
+        description="Envia uma mensagem real pelo botão existente, sem criar incidente ou alterar serviços."
+        icon={<MessageCircle className="w-4 h-4" />}
+        buttonLabel="Testar Telegram"
+        feedback={telegramTest}
+        canRun={canRun}
+        onRun={onTestTelegram}
+        renderDetails={(result) => <TelegramDetails result={result} />}
+      />
+
+      <TestCard
+        testId="test-supabase"
         title="Supabase"
         description="Consulta real ao PostgREST e à saúde do Auth. Não retorna linhas, URL ou chave."
         icon={<Database className="w-4 h-4" />}
@@ -253,6 +288,7 @@ export const IntegrationTestsPanel: React.FC<IntegrationTestsPanelProps> = ({
       />
 
       <TestCard
+        testId="test-automatic-alert"
         title="Alerta automático"
         description="Envia uma mensagem real ao Telegram marcada como [TESTE], sem afetar serviços reais."
         icon={<Send className="w-4 h-4" />}
@@ -264,6 +300,7 @@ export const IntegrationTestsPanel: React.FC<IntegrationTestsPanelProps> = ({
       />
 
       <TestCard
+        testId="test-integration-security"
         title="Segurança da integração"
         description="Testa se o REOBOTE SISTEMAS rejeita chamadas sem credencial e com credencial inválida."
         icon={<ShieldCheck className="w-4 h-4" />}

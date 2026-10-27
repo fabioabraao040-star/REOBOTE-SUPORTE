@@ -162,6 +162,12 @@ export interface AutomaticAlertTestResult {
   error?: string;
 }
 
+export interface TelegramTestResult {
+  success: boolean;
+  simulated: false;
+  checkedAt: string;
+}
+
 export type TestFeedbackStatus =
   | 'idle'
   | 'running'

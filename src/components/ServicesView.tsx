@@ -6,6 +6,7 @@ import {
   MonitoredService,
   SupabaseConnectivityResult,
   SystemsIntegrationStatus,
+  TelegramTestResult,
   TestFeedback
 } from '../types';
 import { SystemsIntegrationCard } from './SystemsIntegrationCard';
@@ -17,9 +18,11 @@ interface ServicesViewProps {
   systemsChecking: boolean;
   onCheckSystems: () => void;
   canRunTests: boolean;
+  telegramTest: TestFeedback<TelegramTestResult>;
   supabaseTest: TestFeedback<SupabaseConnectivityResult>;
   automaticAlertTest: TestFeedback<AutomaticAlertTestResult>;
   securityTest: TestFeedback<IntegrationSecurityResult>;
+  onTestTelegram: () => void;
   onTestSupabase: () => void;
   onTestAutomaticAlert: () => void;
   onTestIntegrationSecurity: () => void;
@@ -34,9 +37,11 @@ export const ServicesView: React.FC<ServicesViewProps> = ({
   systemsChecking,
   onCheckSystems,
   canRunTests,
+  telegramTest,
   supabaseTest,
   automaticAlertTest,
   securityTest,
+  onTestTelegram,
   onTestSupabase,
   onTestAutomaticAlert,
   onTestIntegrationSecurity,
@@ -102,20 +107,23 @@ export const ServicesView: React.FC<ServicesViewProps> = ({
         </button>
       </div>
 
+      {/* Os testes ficam antes do card da integração para aparecerem sem rolagem. */}
+      <IntegrationTestsPanel
+        canRun={canRunTests}
+        telegramTest={telegramTest}
+        supabaseTest={supabaseTest}
+        automaticAlertTest={automaticAlertTest}
+        securityTest={securityTest}
+        onTestTelegram={onTestTelegram}
+        onTestSupabase={onTestSupabase}
+        onTestAutomaticAlert={onTestAutomaticAlert}
+        onTestIntegrationSecurity={onTestIntegrationSecurity}
+      />
+
       <SystemsIntegrationCard
         status={systemsStatus}
         checking={systemsChecking}
         onCheck={onCheckSystems}
-      />
-
-      <IntegrationTestsPanel
-        canRun={canRunTests}
-        supabaseTest={supabaseTest}
-        automaticAlertTest={automaticAlertTest}
-        securityTest={securityTest}
-        onTestSupabase={onTestSupabase}
-        onTestAutomaticAlert={onTestAutomaticAlert}
-        onTestIntegrationSecurity={onTestIntegrationSecurity}
       />
 
       <div className="flex items-center justify-between bg-[#1E293B] p-4 rounded-2xl border border-slate-800">

@@ -91,7 +91,10 @@ export const SystemsIntegrationCard: React.FC<SystemsIntegrationCardProps> = ({
   const overall = status ? overallStyles[status.state] : null;
 
   return (
-    <section className="p-5 rounded-3xl bg-[#1E293B] border border-slate-800 space-y-5">
+    <section
+      data-testid="systems-integration-card"
+      className="p-5 rounded-3xl bg-[#1E293B] border border-slate-800 space-y-5"
+    >
       <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4">
         <div className="flex items-start gap-3">
           <div className="w-11 h-11 rounded-2xl bg-[#2563EB]/15 border border-[#2563EB]/30 text-[#2563EB] flex items-center justify-center shrink-0">
@@ -116,6 +119,7 @@ export const SystemsIntegrationCard: React.FC<SystemsIntegrationCardProps> = ({
             </span>
           )}
           <button
+            data-testid="verify-reobote-systems"
             onClick={onCheck}
             disabled={checking}
             className="px-3.5 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 disabled:opacity-60 text-xs font-semibold text-slate-300 border border-slate-700 flex items-center gap-1.5 transition-colors"

@@ -63,6 +63,7 @@ export const Navbar: React.FC<NavbarProps> = ({
       <div className="flex items-center gap-3">
         {/* Telegram Test Button */}
         <button
+          data-testid="test-telegram-navbar"
           onClick={onTestTelegram}
           disabled={isTestingTelegram}
           aria-busy={isTestingTelegram}

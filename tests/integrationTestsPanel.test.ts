@@ -7,6 +7,7 @@ import type {
   AutomaticAlertTestResult,
   IntegrationSecurityResult,
   SupabaseConnectivityResult,
+  TelegramTestResult,
   TestFeedback,
 } from '../src/types.js';
 
@@ -19,6 +20,12 @@ function feedback<T>(partial: Partial<TestFeedback<T>> = {}): TestFeedback<T> {
     ...partial,
   };
 }
+
+const telegramResult: TelegramTestResult = {
+  success: true,
+  simulated: false,
+  checkedAt: '2026-10-26T13:00:03.000Z',
+};
 
 const supabaseResult: SupabaseConnectivityResult = {
   configured: true,
@@ -56,6 +63,11 @@ function render(overrides: Partial<React.ComponentProps<typeof IntegrationTestsP
   return renderToStaticMarkup(
     React.createElement(IntegrationTestsPanel, {
       canRun: true,
+      telegramTest: feedback({
+        status: 'success',
+        result: telegramResult,
+        checkedAt: telegramResult.checkedAt,
+      }),
       supabaseTest: feedback({ status: 'success', result: supabaseResult, checkedAt: supabaseResult.checkedAt }),
       automaticAlertTest: feedback({
         status: 'success',
@@ -67,6 +79,7 @@ function render(overrides: Partial<React.ComponentProps<typeof IntegrationTestsP
         result: securityResult,
         checkedAt: securityResult.checkedAt,
       }),
+      onTestTelegram: () => {},
       onTestSupabase: () => {},
       onTestAutomaticAlert: () => {},
       onTestIntegrationSecurity: () => {},
@@ -75,17 +88,23 @@ function render(overrides: Partial<React.ComponentProps<typeof IntegrationTestsP
   );
 }
 
-test('painel renderiza os três testes ausentes com resultados reais', () => {
+test('painel renderiza os quatro testes com resultados reais', () => {
   const html = render();
 
+  assert.match(html, /Testar Telegram/);
   assert.match(html, /Testar Supabase/);
   assert.match(html, /Testar alerta automático/);
   assert.match(html, /Testar segurança da integração/);
+  assert.match(html, /Mensagem de teste processada pelo endpoint real do Telegram/);
   assert.match(html, /Banco\/REST: Operacional \(HTTP 204\)/);
   assert.match(html, /Auth: Operacional \(HTTP 200\)/);
   assert.match(html, /Evento \[TESTE\] entregue/);
   assert.match(html, /Sem credencial: 401/);
   assert.match(html, /Credencial inválida: 403/);
+  assert.match(html, /data-testid="test-telegram"/);
+  assert.match(html, /data-testid="test-supabase"/);
+  assert.match(html, /data-testid="test-automatic-alert"/);
+  assert.match(html, /data-testid="test-integration-security"/);
 });
 
 test('falha real não é exibida como sucesso', () => {
@@ -111,12 +130,13 @@ test('falha real não é exibida como sucesso', () => {
 test('perfil sem permissão vê botões desabilitados', () => {
   const html = render({
     canRun: false,
+    telegramTest: feedback(),
     supabaseTest: feedback(),
     automaticAlertTest: feedback(),
     securityTest: feedback(),
   });
 
   assert.match(html, /Somente perfis admin e operador/);
-  assert.equal((html.match(/disabled=""/g) || []).length, 3);
+  assert.equal((html.match(/disabled=""/g) || []).length, 4);
   assert.match(html, /Ainda não executado/);
 });
