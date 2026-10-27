@@ -104,3 +104,74 @@ export interface SystemsIntegrationStatus {
     };
   };
 }
+
+export type SupabaseProbeStatus = 'operational' | 'degraded' | 'unavailable';
+
+export interface SupabaseConnectivityResult {
+  configured: boolean;
+  state: SupabaseProbeStatus | 'not_configured';
+  checkedAt: string;
+  latencyMs: number | null;
+  checks: {
+    database: {
+      status: SupabaseProbeStatus;
+      httpStatus: number | null;
+      latencyMs: number | null;
+    };
+    auth: {
+      status: SupabaseProbeStatus;
+      httpStatus: number | null;
+      latencyMs: number | null;
+    };
+  };
+  error: string | null;
+}
+
+export type IntegrationSecurityState =
+  | 'passed'
+  | 'failed'
+  | 'unavailable'
+  | 'not_configured';
+
+export interface IntegrationSecurityResult {
+  configured: boolean;
+  state: IntegrationSecurityState;
+  checkedAt: string;
+  latencyMs: number | null;
+  checks: {
+    withoutCredential: {
+      status: number | null;
+      passed: boolean;
+      latencyMs: number | null;
+    };
+    invalidCredential: {
+      status: number | null;
+      passed: boolean;
+      latencyMs: number | null;
+    };
+  };
+  error: string | null;
+}
+
+export interface AutomaticAlertTestResult {
+  success: boolean;
+  simulated: false;
+  test: true;
+  testId?: string;
+  checkedAt?: string;
+  error?: string;
+}
+
+export type TestFeedbackStatus =
+  | 'idle'
+  | 'running'
+  | 'success'
+  | 'warning'
+  | 'error';
+
+export interface TestFeedback<T> {
+  status: TestFeedbackStatus;
+  result: T | null;
+  error: string | null;
+  checkedAt: string | null;
+}

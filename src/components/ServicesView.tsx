@@ -1,13 +1,28 @@
 import React, { useState } from 'react';
-import { Server, Plus, RefreshCw, CheckCircle2, Search, Database, Activity, Send } from 'lucide-react';
-import { MonitoredService, SystemsIntegrationStatus } from '../types';
+import { Plus, RefreshCw, Search } from 'lucide-react';
+import {
+  AutomaticAlertTestResult,
+  IntegrationSecurityResult,
+  MonitoredService,
+  SupabaseConnectivityResult,
+  SystemsIntegrationStatus,
+  TestFeedback
+} from '../types';
 import { SystemsIntegrationCard } from './SystemsIntegrationCard';
+import { IntegrationTestsPanel } from './IntegrationTestsPanel';
 
 interface ServicesViewProps {
   services: MonitoredService[];
   systemsStatus: SystemsIntegrationStatus | null;
   systemsChecking: boolean;
   onCheckSystems: () => void;
+  canRunTests: boolean;
+  supabaseTest: TestFeedback<SupabaseConnectivityResult>;
+  automaticAlertTest: TestFeedback<AutomaticAlertTestResult>;
+  securityTest: TestFeedback<IntegrationSecurityResult>;
+  onTestSupabase: () => void;
+  onTestAutomaticAlert: () => void;
+  onTestIntegrationSecurity: () => void;
   onAddService: (service: MonitoredService) => void;
   onUpdateServiceStatus: (id: string, status: MonitoredService['status']) => void;
   onTestService: (service: MonitoredService) => Promise<void>;
@@ -18,6 +33,13 @@ export const ServicesView: React.FC<ServicesViewProps> = ({
   systemsStatus,
   systemsChecking,
   onCheckSystems,
+  canRunTests,
+  supabaseTest,
+  automaticAlertTest,
+  securityTest,
+  onTestSupabase,
+  onTestAutomaticAlert,
+  onTestIntegrationSecurity,
   onAddService,
   onUpdateServiceStatus,
   onTestService
@@ -84,6 +106,16 @@ export const ServicesView: React.FC<ServicesViewProps> = ({
         status={systemsStatus}
         checking={systemsChecking}
         onCheck={onCheckSystems}
+      />
+
+      <IntegrationTestsPanel
+        canRun={canRunTests}
+        supabaseTest={supabaseTest}
+        automaticAlertTest={automaticAlertTest}
+        securityTest={securityTest}
+        onTestSupabase={onTestSupabase}
+        onTestAutomaticAlert={onTestAutomaticAlert}
+        onTestIntegrationSecurity={onTestIntegrationSecurity}
       />
 
       <div className="flex items-center justify-between bg-[#1E293B] p-4 rounded-2xl border border-slate-800">

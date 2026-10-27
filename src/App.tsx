@@ -11,14 +11,18 @@ import { ResetPassword } from './components/ResetPassword';
 
 import { initialSettings } from './lib/mockData';
 import {
+  AutomaticAlertTestResult,
+  IntegrationSecurityResult,
   MonitoredService,
   Incident,
   SystemLog,
   IntegrationSettings,
   User,
   LogSeverity,
+  SupabaseConnectivityResult,
   SystemsIntegrationStatus,
-  SystemsIntegrationState
+  SystemsIntegrationState,
+  TestFeedback
 } from './types';
 import { getSupabase } from './lib/supabase';
 
@@ -62,6 +66,18 @@ function writeLastIntegrationAlertAt(at: number) {
   }
 }
 
+function createIdleTestFeedback<T>(): TestFeedback<T> {
+  return { status: 'idle', result: null, error: null, checkedAt: null };
+}
+
+function getResponseError(data: unknown, fallback: string): string {
+  if (data && typeof data === 'object' && 'error' in data) {
+    const error = (data as { error?: unknown }).error;
+    if (typeof error === 'string' && error.trim()) return error;
+  }
+  return fallback;
+}
+
 export default function App() {
   const [user, setUser] = useState<User | null>(null);
   const [recoveryMode, setRecoveryMode] = useState(false);
@@ -77,6 +93,22 @@ export default function App() {
   const [systemsStatus, setSystemsStatus] = useState<SystemsIntegrationStatus | null>(null);
   const [systemsChecking, setSystemsChecking] = useState(false);
   const systemsCheckInFlight = useRef(false);
+
+  const [supabaseTest, setSupabaseTest] = useState<TestFeedback<SupabaseConnectivityResult>>(
+    createIdleTestFeedback
+  );
+  const [automaticAlertTest, setAutomaticAlertTest] = useState<
+    TestFeedback<AutomaticAlertTestResult>
+  >(createIdleTestFeedback);
+  const [securityTest, setSecurityTest] = useState<TestFeedback<IntegrationSecurityResult>>(
+    createIdleTestFeedback
+  );
+  const supabaseTestInFlight = useRef(false);
+  const automaticAlertTestInFlight = useRef(false);
+  const securityTestInFlight = useRef(false);
+
+  const [telegramTesting, setTelegramTesting] = useState(false);
+  const [lastTelegramTestAt, setLastTelegramTestAt] = useState<string | null>(null);
 
   // Sincroniza os indicadores do menu com o estado real do backend.
   // Antes, Supabase/Telegram apareciam sempre "pendentes" porque o objeto
@@ -309,6 +341,12 @@ export default function App() {
   };
 
   const handleTestTelegram = async () => {
+    if (telegramTesting) return;
+
+    const attemptedAt = new Date().toISOString();
+    setTelegramTesting(true);
+    setLastTelegramTestAt(attemptedAt);
+
     try {
       showToast('info', 'Enviando teste via Telegram Bot...');
       const res = await fetch('/api/telegram/send', {
@@ -321,13 +359,21 @@ export default function App() {
         })
       });
       const data = await res.json().catch(() => null);
+      const time = new Date(attemptedAt).toLocaleTimeString('pt-BR');
+
       if (data?.success) {
-        showToast('success', 'Mensagem enviada com sucesso no Telegram!');
+        showToast('success', `Mensagem enviada com sucesso no Telegram às ${time}.`);
       } else {
-        showToast('error', data?.error || 'Erro ao enviar Telegram.');
+        showToast('error', `${getResponseError(data, 'Erro ao enviar Telegram.')} (tentativa às ${time})`);
       }
-    } catch (err: unknown) {
-      showToast('error', 'Falha ao enviar o teste do Telegram. Verifique a API e as configurações.');
+    } catch {
+      const time = new Date(attemptedAt).toLocaleTimeString('pt-BR');
+      showToast(
+        'error',
+        `Falha ao enviar o teste do Telegram. Verifique a API e as configurações (tentativa às ${time}).`
+      );
+    } finally {
+      setTelegramTesting(false);
     }
   };
 
@@ -437,6 +483,214 @@ export default function App() {
     } catch (error) {
       console.error('Falha no teste de conexão:', error);
       showToast('error', error instanceof Error ? error.message : 'Falha ao testar a conexão.');
+    }
+  };
+
+  const handleTestSupabase = async () => {
+    if (supabaseTestInFlight.current) return;
+
+    if (!user) {
+      showToast('error', 'Entre no sistema para executar o teste do Supabase.');
+      return;
+    }
+
+    if (user.role === 'viewer') {
+      showToast('error', 'Seu perfil não tem permissão para executar testes controlados.');
+      return;
+    }
+
+    supabaseTestInFlight.current = true;
+    setSupabaseTest({ status: 'running', result: null, error: null, checkedAt: null });
+
+    try {
+      const response = await fetch('/api/tests/supabase', {
+        method: 'GET',
+        headers: await getAuthHeaders(),
+        cache: 'no-store'
+      });
+
+      const data = (await response.json().catch(() => null)) as
+        | (Partial<SupabaseConnectivityResult> & { error?: string })
+        | null;
+
+      if (!data || typeof data.state !== 'string') {
+        throw new Error(
+          getResponseError(data, `Falha ao testar o Supabase (HTTP ${response.status}).`)
+        );
+      }
+
+      const result = data as SupabaseConnectivityResult;
+      const status =
+        response.ok && result.state === 'operational'
+          ? 'success'
+          : response.ok && result.state === 'degraded'
+            ? 'warning'
+            : 'error';
+      const message =
+        result.error ||
+        (result.state === 'operational'
+          ? 'Supabase operacional.'
+          : 'Supabase não está operacional.');
+      const latency = result.latencyMs !== null ? ` (${result.latencyMs} ms)` : '';
+
+      setSupabaseTest({
+        status,
+        result,
+        error: status === 'success' ? null : message,
+        checkedAt: result.checkedAt
+      });
+
+      if (status === 'success') {
+        showToast('success', `Supabase operacional${latency}.`);
+      } else if (status === 'warning') {
+        showToast('info', `Supabase com alerta: ${message}`);
+      } else {
+        showToast('error', message);
+      }
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : 'Falha ao testar a conectividade do Supabase.';
+
+      setSupabaseTest({
+        status: 'error',
+        result: null,
+        error: message,
+        checkedAt: new Date().toISOString()
+      });
+      showToast('error', message);
+    } finally {
+      supabaseTestInFlight.current = false;
+    }
+  };
+
+  const handleTestAutomaticAlert = async () => {
+    if (automaticAlertTestInFlight.current) return;
+
+    if (!user) {
+      showToast('error', 'Entre no sistema para executar o teste de alerta.');
+      return;
+    }
+
+    if (user.role === 'viewer') {
+      showToast('error', 'Seu perfil não tem permissão para executar testes controlados.');
+      return;
+    }
+
+    automaticAlertTestInFlight.current = true;
+    setAutomaticAlertTest({ status: 'running', result: null, error: null, checkedAt: null });
+
+    try {
+      const response = await fetch('/api/tests/automatic-alert', {
+        method: 'POST',
+        headers: await getAuthHeaders(),
+        body: JSON.stringify({})
+      });
+
+      const data = (await response.json().catch(() => null)) as
+        | (Partial<AutomaticAlertTestResult> & { error?: string })
+        | null;
+
+      if (!response.ok || data?.success !== true || data?.simulated !== false) {
+        throw new Error(
+          getResponseError(data, `Falha ao testar o alerta automático (HTTP ${response.status}).`)
+        );
+      }
+
+      const result = data as AutomaticAlertTestResult;
+      const checkedAt = result.checkedAt || new Date().toISOString();
+
+      setAutomaticAlertTest({
+        status: 'success',
+        result: { ...result, checkedAt },
+        error: null,
+        checkedAt
+      });
+      showToast(
+        'success',
+        `Alerta [TESTE] entregue ao Telegram às ${new Date(checkedAt).toLocaleTimeString('pt-BR')}.`
+      );
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : 'Falha ao testar o alerta automático.';
+
+      setAutomaticAlertTest({
+        status: 'error',
+        result: null,
+        error: message,
+        checkedAt: new Date().toISOString()
+      });
+      showToast('error', message);
+    } finally {
+      automaticAlertTestInFlight.current = false;
+    }
+  };
+
+  const handleTestIntegrationSecurity = async () => {
+    if (securityTestInFlight.current) return;
+
+    if (!user) {
+      showToast('error', 'Entre no sistema para executar o teste de segurança.');
+      return;
+    }
+
+    if (user.role === 'viewer') {
+      showToast('error', 'Seu perfil não tem permissão para executar testes controlados.');
+      return;
+    }
+
+    securityTestInFlight.current = true;
+    setSecurityTest({ status: 'running', result: null, error: null, checkedAt: null });
+
+    try {
+      const response = await fetch('/api/tests/integration-security', {
+        method: 'POST',
+        headers: await getAuthHeaders(),
+        body: JSON.stringify({})
+      });
+
+      const data = (await response.json().catch(() => null)) as
+        | (Partial<IntegrationSecurityResult> & { error?: string })
+        | null;
+
+      if (!data || typeof data.state !== 'string') {
+        throw new Error(
+          getResponseError(data, `Falha ao testar a segurança da integração (HTTP ${response.status}).`)
+        );
+      }
+
+      const result = data as IntegrationSecurityResult;
+      const passed = response.ok && result.state === 'passed';
+      const message =
+        result.error ||
+        (passed
+          ? 'Endpoint rejeitou as duas chamadas sem credencial válida.'
+          : 'O teste de segurança não passou.');
+
+      setSecurityTest({
+        status: passed ? 'success' : 'error',
+        result,
+        error: passed ? null : message,
+        checkedAt: result.checkedAt
+      });
+
+      if (passed) {
+        showToast('success', 'Segurança da integração aprovada: chamadas sem credencial válida foram rejeitadas.');
+      } else {
+        showToast('error', message);
+      }
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : 'Falha ao testar a segurança da integração.';
+
+      setSecurityTest({
+        status: 'error',
+        result: null,
+        error: message,
+        checkedAt: new Date().toISOString()
+      });
+      showToast('error', message);
+    } finally {
+      securityTestInFlight.current = false;
     }
   };
 
@@ -738,6 +992,8 @@ export default function App() {
           onTestTelegram={handleTestTelegram}
           onRefreshData={handleRefreshData}
           isRefreshing={isRefreshing}
+          isTestingTelegram={telegramTesting}
+          lastTelegramTestAt={lastTelegramTestAt}
         />
 
         {toastMessage && (
@@ -770,6 +1026,13 @@ export default function App() {
               systemsStatus={systemsStatus}
               systemsChecking={systemsChecking}
               onCheckSystems={() => handleCheckSystems(true)}
+              canRunTests={user.role === 'admin' || user.role === 'operator'}
+              supabaseTest={supabaseTest}
+              automaticAlertTest={automaticAlertTest}
+              securityTest={securityTest}
+              onTestSupabase={handleTestSupabase}
+              onTestAutomaticAlert={handleTestAutomaticAlert}
+              onTestIntegrationSecurity={handleTestIntegrationSecurity}
               onAddService={handleAddService}
               onUpdateServiceStatus={handleUpdateServiceStatus}
               onTestService={handleTestService}

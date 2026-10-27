@@ -4,7 +4,11 @@ import dotenv from 'dotenv';
 import { lookup } from 'node:dns/promises';
 import { isIP } from 'node:net';
 import { createClient } from '@supabase/supabase-js';
+import { randomUUID } from 'node:crypto';
 import { checkReoboteSystems } from './reoboteSystems.js';
+import { sendTelegramMessage } from './telegram.js';
+import { testSupabaseConnectivity } from './supabaseConnectivity.js';
+import { testIntegrationSecurity } from './integrationSecurity.js';
 
 dotenv.config();
 
@@ -64,6 +68,38 @@ async function getAuthenticatedUser(req: Request): Promise<AuthResult> {
   }
 
   return { ok: true, user: data.user };
+}
+
+function canManageTests(user: import('@supabase/supabase-js').User): boolean {
+  const role = user.app_metadata?.role;
+  return role === 'admin' || role === 'operator';
+}
+
+// Limite dos testes controlados. Cada ação tem seu próprio teto para evitar
+// cliques repetidos e, no caso do alerta, mensagens reais em excesso.
+const TEST_QUOTA_WINDOW_MS = 60_000;
+const testQuota = new Map<string, { count: number; resetAt: number }>();
+
+function consumeTestQuota(userId: string, action: string, max: number): boolean {
+  const now = Date.now();
+  const key = `${userId}:${action}`;
+
+  if (testQuota.size > 1000) {
+    for (const [bucketKey, bucket] of testQuota) {
+      if (bucket.resetAt <= now) testQuota.delete(bucketKey);
+    }
+  }
+
+  const bucket = testQuota.get(key);
+  if (!bucket || bucket.resetAt <= now) {
+    testQuota.set(key, { count: 1, resetAt: now + TEST_QUOTA_WINDOW_MS });
+    return true;
+  }
+
+  if (bucket.count >= max) return false;
+
+  bucket.count += 1;
+  return true;
 }
 
 // Limite simples por usuário (por instância) para a consulta de integração.
@@ -150,8 +186,7 @@ app.post('/api/telegram/send', async (req, res) => {
       });
     }
 
-    const role = auth.user.app_metadata?.role;
-    if (role !== 'admin' && role !== 'operator') {
+    if (!canManageTests(auth.user)) {
       return res.status(403).json({
         success: false,
         error: 'Seu perfil não tem permissão para enviar alertas.'
@@ -177,51 +212,22 @@ app.post('/api/telegram/send', async (req, res) => {
       });
     }
 
-    const emojiMap: Record<string, string> = {
-      critical: '🚨 [CRÍTICO]',
-      error: '❌ [ERRO GRAVE]',
-      warning: '⚠️ [AVISO]',
-      major: '🟠 [INCIDENTE]',
-      info: 'ℹ️ [INFO]'
-    };
+    const result = await sendTelegramMessage({
+      token,
+      chatId: chat,
+      message,
+      severity: typeof severity === 'string' ? severity : undefined,
+      serviceName: typeof serviceName === 'string' ? serviceName : undefined
+    });
 
-    const prefix =
-      typeof severity === 'string' && emojiMap[severity]
-        ? emojiMap[severity]
-        : '🔔 [REOBOTE SUPORTE]';
-
-    const safeServiceName =
-      typeof serviceName === 'string'
-        ? serviceName.slice(0, 100)
-        : 'Geral';
-
-    const formattedMessage =
-      `${prefix}\n\n` +
-      `Sistema: REOBOTE SUPORTE\n` +
-      `Serviço: ${safeServiceName}\n` +
-      `Data: ${new Date().toLocaleString('pt-BR')}\n\n` +
-      message.trim();
-
-    const telegramResponse = await fetch(
-      `https://api.telegram.org/bot${token}/sendMessage`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          chat_id: chat,
-          text: formattedMessage
-        }),
-        signal: AbortSignal.timeout(10000)
+    if (!result.ok) {
+      if (result.status !== null) {
+        console.error('Telegram recusou o envio:', result.status);
       }
-    );
 
-    const telegramData = await telegramResponse.json().catch(() => null);
-
-    if (!telegramResponse.ok || telegramData?.ok !== true) {
-      console.error('Telegram recusou o envio:', telegramResponse.status);
       return res.status(502).json({
         success: false,
-        error: 'O Telegram não confirmou o envio da mensagem.'
+        error: result.error || 'O Telegram não confirmou o envio da mensagem.'
       });
     }
 
@@ -341,6 +347,171 @@ app.get('/api/integrations/reobote-systems', async (req, res) => {
 
   res.setHeader('Cache-Control', 'no-store');
   return res.json(result);
+});
+
+// Teste real de conectividade com o Supabase. Usa apenas a chave pública no
+// servidor e devolve somente status/latência, nunca linhas, URL ou chave.
+app.get('/api/tests/supabase', async (req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+
+  try {
+    const auth = await getAuthenticatedUser(req);
+    if (!auth.ok) {
+      return res.status(auth.status).json({ error: auth.error });
+    }
+
+    if (!canManageTests(auth.user)) {
+      return res.status(403).json({
+        error: 'Seu perfil não tem permissão para executar testes controlados.'
+      });
+    }
+
+    if (!consumeTestQuota(auth.user.id, 'supabase', 20)) {
+      return res.status(429).json({
+        error: 'Muitos testes de Supabase em pouco tempo. Aguarde um minuto.'
+      });
+    }
+
+    const result = await testSupabaseConnectivity();
+
+    return res.status(result.state === 'not_configured' ? 503 : 200).json(result);
+  } catch (error) {
+    console.error(
+      'Falha no teste de conectividade do Supabase:',
+      error instanceof Error ? error.message : 'Erro desconhecido'
+    );
+    return res.status(500).json({ error: 'Erro interno ao testar o Supabase.' });
+  }
+});
+
+// Teste controlado de entrega do alerta automático. Envia uma mensagem real
+// marcada como [TESTE], mas não cria incidente, log ou alteração de serviço.
+app.post('/api/tests/automatic-alert', async (req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+
+  try {
+    const auth = await getAuthenticatedUser(req);
+    if (!auth.ok) {
+      return res.status(auth.status).json({
+        success: false,
+        simulated: false,
+        test: true,
+        error: auth.error
+      });
+    }
+
+    if (!canManageTests(auth.user)) {
+      return res.status(403).json({
+        success: false,
+        simulated: false,
+        test: true,
+        error: 'Seu perfil não tem permissão para executar testes controlados.'
+      });
+    }
+
+    if (!consumeTestQuota(auth.user.id, 'automatic-alert', 3)) {
+      return res.status(429).json({
+        success: false,
+        simulated: false,
+        test: true,
+        error: 'Muitos testes de alerta em pouco tempo. Aguarde um minuto.'
+      });
+    }
+
+    const token = process.env.TELEGRAM_BOT_TOKEN || '';
+    const chatId = process.env.TELEGRAM_CHAT_ID || '';
+
+    if (!token || !chatId) {
+      return res.status(503).json({
+        success: false,
+        simulated: false,
+        test: true,
+        error: 'Telegram não configurado no ambiente do servidor.'
+      });
+    }
+
+    const testId = `TESTE-${randomUUID()}`;
+    const result = await sendTelegramMessage({
+      token,
+      chatId,
+      message:
+        '[TESTE] Evento sintético de alerta automático. ' +
+        'Nenhum serviço real foi afetado.\n' +
+        `ID do teste: ${testId}`,
+      severity: 'info',
+      serviceName: 'Teste de alerta automático',
+      timeoutMs: 8000
+    });
+
+    if (!result.ok) {
+      if (result.status !== null) {
+        console.error('Telegram recusou o alerta de teste:', result.status);
+      }
+
+      return res.status(502).json({
+        success: false,
+        simulated: false,
+        test: true,
+        testId,
+        checkedAt: new Date().toISOString(),
+        error: result.error || 'O Telegram não confirmou a entrega do alerta de teste.'
+      });
+    }
+
+    return res.json({
+      success: true,
+      simulated: false,
+      test: true,
+      testId,
+      checkedAt: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error(
+      'Falha no teste de alerta automático:',
+      error instanceof Error ? error.message : 'Erro desconhecido'
+    );
+    return res.status(500).json({
+      success: false,
+      simulated: false,
+      test: true,
+      error: 'Erro interno ao testar o alerta automático.'
+    });
+  }
+});
+
+// Teste de segurança do endpoint do REOBOTE SISTEMAS. Não usa o segredo real:
+// uma chamada vai sem credencial e outra com um valor aleatório descartável.
+app.post('/api/tests/integration-security', async (req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+
+  try {
+    const auth = await getAuthenticatedUser(req);
+    if (!auth.ok) {
+      return res.status(auth.status).json({ error: auth.error });
+    }
+
+    if (!canManageTests(auth.user)) {
+      return res.status(403).json({
+        error: 'Seu perfil não tem permissão para executar testes controlados.'
+      });
+    }
+
+    if (!consumeTestQuota(auth.user.id, 'integration-security', 10)) {
+      return res.status(429).json({
+        error: 'Muitos testes de segurança em pouco tempo. Aguarde um minuto.'
+      });
+    }
+
+    const result = await testIntegrationSecurity();
+
+    return res.status(result.state === 'not_configured' ? 503 : 200).json(result);
+  } catch (error) {
+    console.error(
+      'Falha no teste de segurança da integração:',
+      error instanceof Error ? error.message : 'Erro desconhecido'
+    );
+    return res.status(500).json({ error: 'Erro interno ao testar a segurança da integração.' });
+  }
 });
 
 // Qualquer rota /api desconhecida responde JSON (nunca o index.html do SPA).

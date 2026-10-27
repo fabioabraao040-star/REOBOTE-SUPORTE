@@ -9,6 +9,8 @@ interface NavbarProps {
   onTestTelegram: () => void;
   onRefreshData: () => void;
   isRefreshing: boolean;
+  isTestingTelegram?: boolean;
+  lastTelegramTestAt?: string | null;
 }
 
 export const Navbar: React.FC<NavbarProps> = ({
@@ -17,7 +19,9 @@ export const Navbar: React.FC<NavbarProps> = ({
   incidents,
   onTestTelegram,
   onRefreshData,
-  isRefreshing
+  isRefreshing,
+  isTestingTelegram = false,
+  lastTelegramTestAt = null
 }) => {
   const [showNotificationModal, setShowNotificationModal] = useState(false);
 
@@ -30,6 +34,9 @@ export const Navbar: React.FC<NavbarProps> = ({
       : servicesHealthy
         ? 'Todos os sistemas operacionais'
         : `${unhealthyServices.length} serviço(s) com problema`;
+  const lastTelegramLabel = lastTelegramTestAt
+    ? new Date(lastTelegramTestAt).toLocaleString('pt-BR')
+    : 'nenhuma tentativa registrada';
 
   const severityColor: Record<Incident['severity'], string> = {
     critical: 'text-[#DC2626]',
@@ -57,11 +64,19 @@ export const Navbar: React.FC<NavbarProps> = ({
         {/* Telegram Test Button */}
         <button
           onClick={onTestTelegram}
-          className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-[#7C3AED]/20 border border-[#7C3AED]/40 hover:bg-[#7C3AED]/30 text-xs font-medium text-[#7C3AED] transition-all shadow-sm"
-          title="Disparar teste de alerta via Telegram Bot"
+          disabled={isTestingTelegram}
+          aria-busy={isTestingTelegram}
+          className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-[#7C3AED]/20 border border-[#7C3AED]/40 hover:bg-[#7C3AED]/30 disabled:opacity-60 disabled:cursor-not-allowed text-xs font-medium text-[#7C3AED] transition-all shadow-sm"
+          title={`Disparar teste de alerta via Telegram Bot. Última tentativa: ${lastTelegramLabel}`}
         >
-          <Send className="w-3.5 h-3.5" />
-          <span className="hidden sm:inline">Testar Telegram</span>
+          {isTestingTelegram ? (
+            <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+          ) : (
+            <Send className="w-3.5 h-3.5" />
+          )}
+          <span className="hidden sm:inline">
+            {isTestingTelegram ? 'Enviando...' : 'Testar Telegram'}
+          </span>
         </button>
 
         {/* Refresh button */}

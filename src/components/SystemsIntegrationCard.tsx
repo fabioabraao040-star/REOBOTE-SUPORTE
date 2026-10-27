@@ -121,7 +121,7 @@ export const SystemsIntegrationCard: React.FC<SystemsIntegrationCardProps> = ({
             className="px-3.5 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 disabled:opacity-60 text-xs font-semibold text-slate-300 border border-slate-700 flex items-center gap-1.5 transition-colors"
           >
             <RefreshCw className={`w-3.5 h-3.5 text-[#0891B2] ${checking ? 'animate-spin' : ''}`} />
-            <span>{checking ? 'Verificando...' : 'Verificar agora'}</span>
+            <span>{checking ? 'Verificando...' : 'Verificar REOBOTE SISTEMAS'}</span>
           </button>
         </div>
       </div>
